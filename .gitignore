@@ -1,0 +1,13 @@
+# Build artifacts
+/kcron/KindleCron
+/kcron/kcron
+/kcron/kcron.exe
+/dist/
+
+# Test binaries
+*.test
+/kcron/kcron_test_bin
+
+# Editor/OS cruft
+*.swp
+.DS_Store

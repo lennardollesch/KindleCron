@@ -1,0 +1,64 @@
+{
+	"items": [
+	{
+		"name": "KindleCron",
+		"priority": 0,
+		"items": [
+		{
+			"name": "Start",
+			"priority": 1,
+			"action": "/mnt/us/kcron/kcron daemon",
+			"exitmenu": false,
+			"status": false,
+			"onboot": true,
+			"internal": "status Start kcron"
+		},
+		{
+			"name": "Delete all jobs",
+			"priority": 2,
+			"items": [
+				{
+					"name": "[Confirm] Delete all jobs",
+					"priority": 0,
+					"action": "/mnt/us/kcron/kcron purge -y",
+					"exitmenu": false,
+					"status": false,
+					"internal": "status Delete all jobs"
+				}
+			]
+			
+		},
+		{
+			"name": "Kill running jobs",
+			"priority": 3,
+			"action": "/mnt/us/kcron/kcron kill-jobs",
+			"exitmenu": false,
+			"status": false,
+			"internal": "status Kill all running jobs"
+		},
+		{
+			"name": "Clean logs",
+			"priority": 4,
+			"items": [
+				{
+					"name": "[Confirm] Clean logs",
+					"priority": 0,
+					"action": "/mnt/us/kcron/kcron clean-logs -y",
+					"exitmenu": false,
+					"status": false,
+					"internal": "status Clean logs"
+				}
+			]
+		},
+		{
+			"name": "Stop",
+			"priority": 5,
+			"action": "/mnt/us/kcron/kcron stop",
+			"exitmenu": false,
+			"status": false,
+			"internal": "status Stop kcron"
+		}
+		]
+	}
+	]
+}

@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Ensure tag is on main
+      run: |
+        git fetch origin main
+        if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "Tag is on main"
+        else
+          echo "Tag is NOT on main"
+          exit 1
+        fi
+
+    - name: Go Setup
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: kcron/go.mod
+
+    - name: Dependencies
+      working-directory: kcron
+      run: go mod download
+
+    - name: Test
+      working-directory: kcron
+      run: go test ./...
+
+    - name: Version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+    - name: Build
+      working-directory: kcron
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: |
+        mkdir -p ../dist/kcron
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o ../dist/kcron/kcron .
+
+    - name: Assets
+      run: |
+        cp README.md dist/
+        cp LICENSE dist/
+        mkdir -p dist/extensions/kcron
+        cp extensions/kcron/menu.json dist/extensions/kcron
+
+    - name: XML
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: sed "s|{{VERSION}}|${VERSION#v}|g" extensions/kcron/config.xml.template > dist/extensions/kcron/config.xml
+
+    - name: ZIP
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: |
+        cd dist
+        zip -r "../kcron_${VERSION}.zip" .
+
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: kcron_${{ steps.version.outputs.VERSION }}.zip
