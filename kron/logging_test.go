@@ -9,7 +9,7 @@ import (
 )
 
 func TestCappedFileTrimsOldestLines(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kcron.log")
+	path := filepath.Join(t.TempDir(), "kron.log")
 	capped, err := newCappedFile(path, 200) // trim target (low) = 100
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestCappedFileTrimsOldestLines(t *testing.T) {
 }
 
 func TestCappedFileUnlimited(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kcron.log")
+	path := filepath.Join(t.TempDir(), "kron.log")
 	capped, err := newCappedFile(path, 0) // 0 = unlimited
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestCappedFileUnlimited(t *testing.T) {
 }
 
 func TestCappedFileTruncate(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kcron.log")
+	path := filepath.Join(t.TempDir(), "kron.log")
 	capped, err := newCappedFile(path, 0)
 	if err != nil {
 		t.Fatal(err)

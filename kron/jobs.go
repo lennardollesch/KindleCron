@@ -27,12 +27,17 @@ type job struct {
 	timeout  time.Duration // per-job run-time limit; 0 = use the global default
 }
 
+// jobFiles returns the paths of all .job files in jobs.d, sorted by name so the
+// evaluation order is stable from run to run.
 func jobFiles() []string {
 	matches, _ := filepath.Glob(filepath.Join(jobsDir, "*.job"))
 	sort.Strings(matches)
 	return matches
 }
 
+// readJob parses one .job file. It never fails: a file that cannot be read or
+// carries no usable schedule comes back with schedErr set, which makes the
+// daemon skip it and `kron list` mark it INVALID.
 func readJob(path string) job {
 	parsed := job{name: strings.TrimSuffix(filepath.Base(path), ".job"), enabled: true}
 	file, err := os.Open(path)
@@ -77,6 +82,9 @@ func readJob(path string) job {
 	return parsed
 }
 
+// getLastRun reads a job's last-run stamp from state/<name>.last. A missing or
+// unreadable stamp reads as the Unix epoch, which the schedule forms treat as
+// "never run".
 func getLastRun(name string) time.Time {
 	data, err := os.ReadFile(lastPath(name))
 	if err != nil {
@@ -89,29 +97,42 @@ func getLastRun(name string) time.Time {
 	return time.Unix(seconds, 0)
 }
 
-func setLastRun(name string, t time.Time) {
-	if err := atomicWrite(lastPath(name), []byte(strconv.FormatInt(t.Unix(), 10)+"\n")); err != nil {
+// setLastRun records a job's last-run stamp. A write failure is logged rather
+// than returned: the job itself already ran, and the next evaluation simply
+// re-reads whatever stamp is on disk.
+func setLastRun(name string, stamp time.Time) {
+	if err := atomicWrite(lastPath(name), []byte(strconv.FormatInt(stamp.Unix(), 10)+"\n")); err != nil {
 		logf("set last-run %s failed: %v", name, err)
 	}
 }
 
-// atomicWrite writes via a temp file in the same directory, then renames.
+// atomicWrite replaces the file at path with data, so a reader never observes a
+// half-written state file. The data goes to a temporary file in the same
+// directory (a rename is only atomic within one filesystem), is flushed to
+// storage, and only then replaces the target. If the device loses power at any
+// point, path still holds either the complete old or the complete new content.
 func atomicWrite(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	tempFile, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(name)
+	tempPath := tempFile.Name()
+	tempFile.Chmod(0o644) // CreateTemp makes 0600; the state files are expected at 0644
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+	if err := tempFile.Sync(); err != nil { // flush to storage before the rename
+		tempFile.Close()
+		os.Remove(tempPath)
 		return err
 	}
-	return os.Rename(name, path)
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 // jobTimeoutMax is the default run-time limit for a job that does not set its own
@@ -121,9 +142,9 @@ func atomicWrite(path string, data []byte) error {
 var jobTimeoutMax = 10 * time.Minute
 
 // effectiveTimeout is the per-job timeout if set, otherwise the global default.
-func (def job) effectiveTimeout() time.Duration {
-	if def.timeout > 0 {
-		return def.timeout
+func (entry job) effectiveTimeout() time.Duration {
+	if entry.timeout > 0 {
+		return entry.timeout
 	}
 	return jobTimeoutMax
 }
@@ -132,12 +153,12 @@ func (def job) effectiveTimeout() time.Duration {
 // called with the command just before it starts and must return a deregister
 // func, run when the command finishes; this lets the daemon track the live
 // process so it can terminate it on shutdown. register may be nil (CLI path).
-func runJob(def job, register func(*exec.Cmd) func()) int {
-	logf("run '%s': %s", def.name, def.command)
-	timeout := def.effectiveTimeout()
+func runJob(entry job, register func(*exec.Cmd) func()) int {
+	logf("run '%s': %s", entry.name, entry.command)
+	timeout := entry.effectiveTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", def.command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", entry.command)
 	// Run in its own process group and, on timeout (ctx cancel), kill the WHOLE
 	// group rather than just the sh process. Otherwise the actual command (a
 	// grandchild) is orphaned and keeps running past the timeout. This also makes
@@ -147,37 +168,39 @@ func runJob(def job, register func(*exec.Cmd) func()) int {
 		killProcessGroup(cmd)
 		return nil
 	}
-	if file, err := os.Create(logPath(def.name)); err == nil {
+	if file, err := os.Create(logPath(entry.name)); err == nil {
 		cmd.Stdout, cmd.Stderr = file, file
 		defer file.Close()
 	}
 	if register != nil {
-		// Start explicitly so the process exists before we register it, then wait.
+		// Start explicitly so the process exists before register, then wait.
 		if err := cmd.Start(); err != nil {
-			logf("done '%s' (start failed: %v)", def.name, err)
+			logf("done '%s' (start failed: %v)", entry.name, err)
 			return -1
 		}
 		deregister := register(cmd)
 		err := cmd.Wait()
 		deregister()
-		return jobExitCode(ctx, def, timeout, err)
+		return jobExitCode(ctx, entry, timeout, err)
 	}
 	err := cmd.Run()
-	return jobExitCode(ctx, def, timeout, err)
+	return jobExitCode(ctx, entry, timeout, err)
 }
 
 // writeJobPid records a running job's process-group id (the leader pid) so an
-// external `kcron kill-jobs` can terminate it after an unclean daemon death. Removed
+// external `kron kill-jobs` can terminate it after an unclean daemon death. Removed
 // when the job finishes; a leftover file means the daemon died without cleanup.
 func writeJobPid(name string, pid int) {
 	atomicWrite(jobPidPath(name), []byte(strconv.Itoa(pid)+"\n"))
 }
 
-func jobExitCode(ctx context.Context, def job, timeout time.Duration, err error) int {
+// jobExitCode logs how a finished job ended and reports its exit code. A job
+// that could not be started, or that was killed on timeout, reports -1.
+func jobExitCode(ctx context.Context, entry job, timeout time.Duration, err error) int {
 	returnCode := 0
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			logf("TIMEOUT '%s' after %s - killed (device can suspend again)", def.name, timeout)
+			logf("TIMEOUT '%s' after %s - killed (device can suspend again)", entry.name, timeout)
 			return -1
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -186,6 +209,6 @@ func jobExitCode(ctx context.Context, def job, timeout time.Duration, err error)
 			returnCode = -1
 		}
 	}
-	logf("done '%s' (exit %d)", def.name, returnCode)
+	logf("done '%s' (exit %d)", entry.name, returnCode)
 	return returnCode
 }

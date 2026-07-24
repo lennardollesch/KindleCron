@@ -1,12 +1,12 @@
 # Build artifacts
-/kcron/KindleCron
-/kcron/kcron
-/kcron/kcron.exe
+/kron/KindleCron
+/kron/kron
+/kron/kron.exe
 /dist/
 
 # Test binaries
 *.test
-/kcron/kcron_test_bin
+/kron/kron_test_bin
 
 # Editor/OS cruft
 *.swp

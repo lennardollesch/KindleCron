@@ -1,0 +1,9 @@
+# Normalize line endings - Go tooling (gofmt) expects LF.
+* text=auto eol=lf
+
+*.go   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.svg  text eol=lf

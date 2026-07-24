@@ -18,6 +18,8 @@ type cappedFile struct {
 	low  int64 // trim target
 }
 
+// newCappedFile opens path for appending, capped at max bytes (0 = unlimited).
+// A file that is already over the cap is trimmed straight away.
 func newCappedFile(path string, max int64) (*cappedFile, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -34,6 +36,7 @@ func newCappedFile(path string, max int64) (*cappedFile, error) {
 	return cf, nil
 }
 
+// Write appends to the log, trimming it once the write pushes it over the cap.
 func (cf *cappedFile) Write(p []byte) (int, error) {
 	cf.mu.Lock()
 	defer cf.mu.Unlock()
@@ -73,6 +76,8 @@ func (cf *cappedFile) trim() {
 	cf.size = int64(len(tail))
 }
 
+// reopen re-establishes the append handle after trim or Truncate replaced the
+// file underneath it. Called under cf.mu.
 func (cf *cappedFile) reopen() {
 	if file, err := os.OpenFile(cf.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
 		cf.file = file
@@ -80,7 +85,7 @@ func (cf *cappedFile) reopen() {
 }
 
 // Truncate empties the log file and resets the size counter, keeping the writer
-// usable. Used by the clean-logs command.
+// usable. Used by the clear-logs command.
 func (cf *cappedFile) Truncate() error {
 	cf.mu.Lock()
 	defer cf.mu.Unlock()

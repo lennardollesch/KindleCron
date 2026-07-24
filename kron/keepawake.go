@@ -1,9 +1,6 @@
 package main
 
-import (
-	"os/exec"
-	"time"
-)
+import "time"
 
 // The suspend/wake roundtrip on a Kindle costs real wall-clock time: between
 // readyToSuspend and a job actually running after wakeupFromSuspend, the device
@@ -39,13 +36,13 @@ func activeThreshold() time.Duration {
 // to it aborts the in-progress suspend transition and restarts the short
 // ReadyToSuspend countdown WITHOUT kicking the machine back to Active. The device
 // stays right at the edge of sleep instead of fully waking, so power use is far
-// lower than deferSuspend, and a short-interval job no longer prevents the device
-// from eventually sleeping once the job stops being imminent.
+// lower than with deferSuspend, and the device suspends on its own as soon as the
+// job stops being imminent.
 const propAbortSuspend = "abortSuspend"
 
 // requestAbortSuspend tells powerd to abort the in-progress suspend and restart the
 // ReadyToSuspend countdown. Must be called during readyToSuspend. Returns an error
 // if powerd rejects it (wrong state, or unavailable on this firmware).
 func requestAbortSuspend() error {
-	return exec.Command("lipc-set-prop", "-i", powerd, propAbortSuspend, "1").Run()
+	return setPowerdProp(propAbortSuspend, 1)
 }

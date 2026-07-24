@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestJobListLine(t *testing.T) {
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.Local)
 
 	// Short interval under the threshold -> flagged keep-awake, shows next-due.
-	short := job{name: "quick", schedRaw: "every 1m", sched: schedule{kind: kEvery, interval: time.Minute}, enabled: true, mtime: now}
+	short := job{name: "quick", schedRaw: "every 1m", sched: schedule{kind: kindEvery, interval: time.Minute}, enabled: true, mtime: now}
 	line, isShort := jobListLine(short, now)
 	if !isShort {
 		t.Fatal("every-1m under threshold should be a keep-awake job")
@@ -101,7 +102,7 @@ func TestJobListLine(t *testing.T) {
 	}
 
 	// Per-job timeout is shown; a long interval is not keep-awake.
-	withTimeout := job{name: "slow", schedRaw: "every 2h", sched: schedule{kind: kEvery, interval: 2 * time.Hour}, enabled: true, mtime: now, timeout: 5 * time.Minute}
+	withTimeout := job{name: "slow", schedRaw: "every 2h", sched: schedule{kind: kindEvery, interval: 2 * time.Hour}, enabled: true, mtime: now, timeout: 5 * time.Minute}
 	line, isShort = jobListLine(withTimeout, now)
 	if isShort {
 		t.Fatal("a 2h interval is not a keep-awake job")
@@ -111,7 +112,7 @@ func TestJobListLine(t *testing.T) {
 	}
 
 	// Disabled job: status "disabled", never counts as keep-awake.
-	disabled := job{name: "off", schedRaw: "every 1m", sched: schedule{kind: kEvery, interval: time.Minute}, enabled: false, mtime: now}
+	disabled := job{name: "off", schedRaw: "every 1m", sched: schedule{kind: kindEvery, interval: time.Minute}, enabled: false, mtime: now}
 	line, isShort = jobListLine(disabled, now)
 	if isShort {
 		t.Fatal("a disabled job must not be flagged keep-awake")
@@ -125,5 +126,32 @@ func TestJobListLine(t *testing.T) {
 	line, _ = jobListLine(invalid, now)
 	if !strings.Contains(line, "INVALID:") {
 		t.Fatalf("invalid status missing: %q", line)
+	}
+}
+
+func TestValidateJobName(t *testing.T) {
+	valid := []string{"backup", "job-1", "My_Job.2", "with space"}
+	for _, name := range valid {
+		if err := validateJobName(name); err != nil {
+			t.Errorf("validateJobName(%q) = %v, want nil", name, err)
+		}
+	}
+	// Empty, path traversal, hidden/dot names, and the reserved daemon name.
+	invalid := []string{"", "../escape", "a/b", `a\b`, ".", "..", ".hidden", "kron"}
+	for _, name := range invalid {
+		if err := validateJobName(name); err == nil {
+			t.Errorf("validateJobName(%q) = nil, want an error", name)
+		}
+	}
+}
+
+func TestDirOnPath(t *testing.T) {
+	dir := filepath.Dir(kronLinkPath)
+	t.Setenv("PATH", strings.Join([]string{"/sbin", dir, "/bin"}, string(os.PathListSeparator)))
+	if !dirOnPath(dir) {
+		t.Fatalf("%s not found on PATH", dir)
+	}
+	if dirOnPath("/nonexistent/xyz") {
+		t.Fatal("reported /nonexistent/xyz on PATH")
 	}
 }

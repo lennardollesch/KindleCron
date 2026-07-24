@@ -68,8 +68,9 @@ func TestParseCronFieldSyntax(t *testing.T) {
 
 func TestCronNext(t *testing.T) {
 	utc := time.UTC
-	d := func(y int, mo time.Month, day, h, mi, s int) time.Time {
-		return time.Date(y, mo, day, h, mi, s, 0, utc)
+	// at builds a UTC instant, keeping the table below readable.
+	at := func(year int, month time.Month, day, hour, minute, second int) time.Time {
+		return time.Date(year, month, day, hour, minute, second, 0, utc)
 	}
 	cases := []struct {
 		spec string
@@ -77,18 +78,18 @@ func TestCronNext(t *testing.T) {
 		want time.Time
 	}{
 		// 2026-06-22 is a Monday; 06-24 Wed, 06-27 Sat, 06-29 Mon.
-		{"0 9 * * 1", d(2026, 6, 24, 12, 0, 0), d(2026, 6, 29, 9, 0, 0)}, // next Monday 09:00
-		{"0 9 * * 1", d(2026, 6, 22, 8, 0, 0), d(2026, 6, 22, 9, 0, 0)},  // same Monday, later today
-		{"*/15 * * * *", d(2026, 6, 22, 10, 7, 0), d(2026, 6, 22, 10, 15, 0)},
-		{"0/30 * * * * *", d(2026, 6, 22, 10, 0, 10), d(2026, 6, 22, 10, 0, 30)}, // every 30s
-		{"0/30 * * * * *", d(2026, 6, 22, 10, 0, 40), d(2026, 6, 22, 10, 1, 0)},
-		{"0 0 1 * *", d(2026, 6, 22, 0, 0, 0), d(2026, 7, 1, 0, 0, 0)},       // 1st of next month
-		{"30 7 * * 1-5", d(2026, 6, 27, 12, 0, 0), d(2026, 6, 29, 7, 30, 0)}, // Sat -> Mon 07:30
+		{"0 9 * * 1", at(2026, 6, 24, 12, 0, 0), at(2026, 6, 29, 9, 0, 0)}, // next Monday 09:00
+		{"0 9 * * 1", at(2026, 6, 22, 8, 0, 0), at(2026, 6, 22, 9, 0, 0)},  // same Monday, later today
+		{"*/15 * * * *", at(2026, 6, 22, 10, 7, 0), at(2026, 6, 22, 10, 15, 0)},
+		{"0/30 * * * * *", at(2026, 6, 22, 10, 0, 10), at(2026, 6, 22, 10, 0, 30)}, // every 30s
+		{"0/30 * * * * *", at(2026, 6, 22, 10, 0, 40), at(2026, 6, 22, 10, 1, 0)},
+		{"0 0 1 * *", at(2026, 6, 22, 0, 0, 0), at(2026, 7, 1, 0, 0, 0)},       // 1st of next month
+		{"30 7 * * 1-5", at(2026, 6, 27, 12, 0, 0), at(2026, 6, 29, 7, 30, 0)}, // Sat -> Mon 07:30
 	}
-	for _, c := range cases {
-		got := mustCron(t, c.spec).next(c.from)
-		if !got.Equal(c.want) {
-			t.Errorf("(%q).next(%s) = %s, want %s", c.spec, c.from, got, c.want)
+	for _, testCase := range cases {
+		got := mustCron(t, testCase.spec).next(testCase.from)
+		if !got.Equal(testCase.want) {
+			t.Errorf("(%q).next(%s) = %s, want %s", testCase.spec, testCase.from, got, testCase.want)
 		}
 	}
 }
@@ -130,9 +131,9 @@ func TestCronDST(t *testing.T) {
 	}
 	// 2026-03-29 02:00-02:59 does not exist in Berlin (spring forward). A daily
 	// 02:30 job has no valid slot that day; next lands on the following day.
-	c := mustCron(t, "30 2 * * *")
+	daily := mustCron(t, "30 2 * * *")
 	from := time.Date(2026, 3, 28, 12, 0, 0, 0, berlin)
-	got := c.next(from)
+	got := daily.next(from)
 	if got.Hour() == 2 && got.Day() == 29 {
 		t.Fatalf("next = %s, expected to skip the nonexistent 02:30 on 2026-03-29", got)
 	}
@@ -205,7 +206,7 @@ func TestShortCronGap(t *testing.T) {
 		t.Fatal("weekly cron should not be flagged short-cadence")
 	}
 
-	// Regression: dense bursts whose NEXT fire is far off must NOT be flagged.
+	// Dense bursts whose NEXT fire is far off must NOT be flagged.
 	// "* * * 1 * *" fires every second, but only on the 1st; from June 22 the next
 	// fire is ~9 days out, so the device sleeps until then.
 	if gap, ok := shortCronGap(mustCron(t, "* * * 1 * *"), threshold, from); ok {
@@ -222,6 +223,17 @@ func TestShortCronGap(t *testing.T) {
 	if gap, ok := shortCronGap(annual, threshold, time.Date(2026, 6, 22, 13, 59, 0, 0, time.UTC)); !ok || gap != 10*time.Second {
 		t.Fatalf("imminent annual burst gap = %s ok=%v, want 10s true", gap, ok)
 	}
+
+	// A plain every-10-minutes cron (gaps of 600s) must never be flagged, at any
+	// moment in its cycle. Sweeping the whole cycle also pins down that `add` and
+	// `list` agree, since both report the keep-awake note from this one gate.
+	tenMin := mustCron(t, "*/10 * * * *")
+	for offset := 0; offset < 600; offset += 7 {
+		at := from.Add(time.Duration(offset) * time.Second)
+		if gap, ok := shortCronGap(tenMin, threshold, at); ok {
+			t.Fatalf("*/10 * * * * flagged at +%ds (gap %s); a 10-minute cadence must never warn", offset, gap)
+		}
+	}
 }
 
 func TestParseScheduleBareCron(t *testing.T) {
@@ -231,8 +243,8 @@ func TestParseScheduleBareCron(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bare cron parse: %v", err)
 	}
-	if bare.kind != kCron {
-		t.Fatalf("bare expression kind = %d, want kCron", bare.kind)
+	if bare.kind != kindCron {
+		t.Fatalf("bare expression kind = %d, want kindCron", bare.kind)
 	}
 	keyword, err := parseSchedule("cron 0 9 * * 1")
 	if err != nil {
@@ -245,7 +257,7 @@ func TestParseScheduleBareCron(t *testing.T) {
 		t.Fatalf("bare nextDue %s != keyword nextDue %s", bareDue, keywordDue)
 	}
 	// 6-field bare expression is accepted too.
-	if six, err := parseSchedule("*/30 * * * * *"); err != nil || six.kind != kCron {
+	if six, err := parseSchedule("*/30 * * * * *"); err != nil || six.kind != kindCron {
 		t.Fatalf("bare 6-field cron: kind=%d err=%v", six.kind, err)
 	}
 	// Neither a keyword form nor a valid cron expression -> error.

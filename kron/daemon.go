@@ -14,13 +14,16 @@ import (
 const (
 	powerd = "com.lab126.powerd"
 	events = "goingToScreenSaver,wakeupFromSuspend,readyToSuspend"
-)
 
-var (
-	minDelta    = 60              // never arm the RTC closer than this (s)
 	maxDelta    = 86400           // longest single sleep; heartbeat + fallback (s)
 	retryDelay  = 5 * time.Second // wait before re-subscribing if the stream ends
 	armAttempts = 4               // retries for setting rtcWakeup near suspend
+)
+
+var (
+	// minDelta is the RTC floor (never arm closer than this, in seconds). A var,
+	// not a const, only so tests can lower it.
+	minDelta = 60
 
 	// wakeLead is a deliberate safety margin: the RTC is armed to fire this much
 	// BEFORE a job is due, so the device is reliably awake (in Active, then drifting
@@ -35,7 +38,7 @@ var (
 //
 // The keep-awake mode uses powerd's abortSuspend, a write-only trigger that is
 // only settable during readyToSuspend. There is no "currently holding the device
-// awake" state to track and no cleanup to guarantee on exit: if kcron dies, no
+// awake" state to track and no cleanup to guarantee on exit: if kron dies, no
 // further aborts are sent and powerd completes the next suspend on its own.
 type daemon struct {
 	// deferring is true while suspend is being aborted for a running or imminent
@@ -84,6 +87,8 @@ func (dm *daemon) jobFinished(id int) {
 	dm.mu.Unlock()
 }
 
+// anyJobRunning reports whether any job is dispatched and not yet finished. This
+// is the signal that must block a suspend.
 func (dm *daemon) anyJobRunning() bool {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -121,7 +126,12 @@ func newDaemon() *daemon {
 	return &daemon{}
 }
 
-func runDaemon() {
+// runDaemon is the scheduler itself and does not return under normal operation.
+// It takes the singleton lock, then waits on two sources at once: powerd's event
+// stream, which drives the suspend decisions, and a timer for the soonest due
+// job, which runs jobs that fall due while the device is awake. A stop signal
+// terminates any running jobs and exits.
+func runDaemon(eipsOut bool) {
 	// Single-instance via an exclusive file lock (flock on Unix). This is
 	// stale-proof: the lock is released by the kernel when the process dies, even
 	// on a crash, so there is no leftover pidfile to reason about. Covers both
@@ -129,11 +139,13 @@ func runDaemon() {
 	lock, ok := acquireSingleton(lockPath())
 	if !ok {
 		logf("another instance is already running; exiting")
+		drawOrLog(eipsOut, "kron already running")
 		return
 	}
 	defer lock.Close()
 
 	logf("scheduler starting (data dir %s)", baseDir)
+	drawOrLog(eipsOut, "kron daemon started")
 
 	// Anchor never-run 'every' jobs to the daemon start by seeding a real last-run
 	// stamp now. This makes the first run land one interval after start (intuitive)
@@ -154,19 +166,20 @@ func runDaemon() {
 		// Terminate any still-running job processes so they do not survive the
 		// daemon as orphans (a backgrounded job whose parent exits would otherwise
 		// be reparented to init and keep running). abortSuspend needs no cleanup: it
-		// auto-expires once we stop sending it.
-		if n := dm.killRunningJobs(); n > 0 {
-			logf("terminated %d running job(s) on shutdown", n)
+		// auto-expires once stop sending it.
+		if killed := dm.killRunningJobs(); killed > 0 {
+			logf("terminated %d running job(s) on shutdown", killed)
 		}
 		lock.Close()
 		os.Exit(0)
 	}()
 
 	// wakeTimer fires when the soonest job becomes due while the device is awake.
-	// powerd events handle the suspend path; this handles everything in between,
-	// so jobs no longer wait for the next wake to run. A resting timer costs
-	// nothing (no polling) and does not keep the device from suspending: on
-	// suspend the CPU stops and the timer with it, and the RTC takes over.
+	// powerd events cover the suspend path; this covers everything in between, so a
+	// job due during normal use runs at its time instead of waiting for the next
+	// wake. A resting timer costs nothing (no polling) and does not keep the device
+	// from suspending: on suspend the CPU stops and the timer with it, and the RTC
+	// takes over.
 	wakeTimer := time.NewTimer(time.Hour)
 	wakeTimer.Stop()
 	rearm := func() {
@@ -194,7 +207,7 @@ func runDaemon() {
 	// Outer loop re-subscribes if powerd restarts (firmware update, crash, ...).
 	for {
 		cmd := exec.Command("lipc-wait-event", "-m", powerd, events)
-		out, err := cmd.StdoutPipe()
+		eventStream, err := cmd.StdoutPipe()
 		if err == nil {
 			err = cmd.Start()
 		}
@@ -208,7 +221,7 @@ func runDaemon() {
 		// the wake timer. A closed channel signals the stream ended.
 		lines := make(chan string)
 		go func() {
-			scanner := bufio.NewScanner(out) // blocks while idle: zero CPU
+			scanner := bufio.NewScanner(eventStream) // blocks while idle: zero CPU
 			for scanner.Scan() {
 				lines <- strings.TrimSpace(scanner.Text())
 			}
@@ -238,6 +251,8 @@ func runDaemon() {
 	}
 }
 
+// handleEvent dispatches one line of powerd's event stream. Unknown lines are
+// ignored, so a firmware that emits extra events does no harm.
 func (dm *daemon) handleEvent(line string) {
 	switch {
 	case strings.HasPrefix(line, "goingToScreenSaver"):
@@ -273,7 +288,7 @@ func (dm *daemon) onWake() {
 // (for a running or imminent job) and arming the RTC to sleep. Aborting uses
 // powerd's abortSuspend, which restarts the short ReadyToSuspend countdown without
 // kicking the device back to the Active state; powerd then re-emits readyToSuspend
-// and kcron re-evaluates. No state is "held": if the job is still imminent next time,
+// and kron re-evaluates. No state is "held": if the job is still imminent next time,
 // it aborts again; once it is far enough out, it stops aborting and the device
 // suspends (it also arms the RTC so the device wakes for the job after sleeping).
 func (dm *daemon) onReadyToSuspend() {
@@ -342,7 +357,7 @@ func (dm *daemon) dispatchDue() {
 			continue
 		}
 		// Commit grid/state now, synchronously, so re-evaluation won't re-fire it.
-		if entry.sched.kind == kOnce {
+		if entry.sched.kind == kindOnce {
 			os.Remove(path)
 			os.Remove(lastPath(entry.name))
 			logf("one-shot '%s' fired and removed", entry.name)
@@ -350,17 +365,23 @@ func (dm *daemon) dispatchDue() {
 			setLastRun(entry.name, entry.sched.fireStamp(last, entry.mtime, now))
 		}
 		id := dm.jobDispatched() // synchronous: anyJobRunning() true immediately
-		go func(def job, id int) {
+		once := entry.sched.kind == kindOnce
+		go func(entry job, id int, once bool) {
 			defer dm.jobFinished(id)
-			runJob(def, func(cmd *exec.Cmd) func() {
+			runJob(entry, func(cmd *exec.Cmd) func() {
 				dm.jobProcessStarted(id, cmd)
 				// Record the process-group id (== leader pid) so an external
-				// `kcron kill-jobs` can terminate this job even if the daemon later
+				// `kron kill-jobs` can terminate this job even if the daemon later
 				// dies uncleanly and its in-memory tracking is lost.
-				writeJobPid(def.name, cmd.Process.Pid)
-				return func() { os.Remove(jobPidPath(def.name)) }
+				writeJobPid(entry.name, cmd.Process.Pid)
+				return func() { os.Remove(jobPidPath(entry.name)) }
 			})
-		}(entry, id)
+			if once {
+				// The one-shot already removed its .job and .last; drop the log it
+				// just wrote too, so a self-removing job leaves nothing behind.
+				os.Remove(logPath(entry.name))
+			}
+		}(entry, id, once)
 	}
 }
 
@@ -372,7 +393,7 @@ func (dm *daemon) dispatchDue() {
 func seedEveryJobs(start time.Time) {
 	for _, path := range jobFiles() {
 		entry := readJob(path)
-		if entry.schedErr != nil || entry.sched.kind != kEvery {
+		if entry.schedErr != nil || entry.sched.kind != kindEvery {
 			continue
 		}
 		if getLastRun(entry.name).Unix() > 0 {
@@ -433,12 +454,19 @@ func computeWakeDelta(now, soonest time.Time, have bool) int {
 	return delta
 }
 
+// setPowerdProp sets an integer property on powerd via lipc-set-prop. Both the
+// RTC wake-up (armRTC) and the abortSuspend trigger (requestAbortSuspend) go
+// through it.
+func setPowerdProp(prop string, value int) error {
+	return exec.Command("lipc-set-prop", "-i", powerd, prop, strconv.Itoa(value)).Run()
+}
+
 // armRTC sets powerd's rtcWakeup, retrying transient failures. (rtcWakeup is
 // effectively write-only on the device, so it is not read back.)
 func armRTC(delta int) {
 	var err error
 	for attempt := 1; attempt <= armAttempts; attempt++ {
-		err = exec.Command("lipc-set-prop", "-i", powerd, "rtcWakeup", strconv.Itoa(delta)).Run()
+		err = setPowerdProp("rtcWakeup", delta)
 		if err == nil {
 			logf("rtc armed for %ds", delta)
 			return

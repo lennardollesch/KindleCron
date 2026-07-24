@@ -4,7 +4,7 @@
 		<name>KindleCron</name>
 		<version>{{VERSION}}</version>
 		<author>Lennard Ollesch</author>
-		<id>kcron</id>
+		<id>KindleCron</id>
 	</information>
 	<menus>
 		<menu type="json" dynamic="true">menu.json</menu>

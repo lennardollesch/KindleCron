@@ -13,18 +13,21 @@ var Version = "dev"
 // versionString combines the injected version with the VCS info that the Go
 // toolchain embeds automatically, plus the toolchain and target platform.
 func versionString() string {
-	s := "KindleCron " + Version
+	text := "KindleCron " + Version
 	if revision, dirty := vcsInfo(); revision != "" {
 		mark := ""
 		if dirty {
 			mark = "-dirty"
 		}
-		s += fmt.Sprintf(" (%s%s)", revision, mark)
+		text += fmt.Sprintf(" (%s%s)", revision, mark)
 	}
-	s += fmt.Sprintf(", %s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
-	return s
+	text += fmt.Sprintf(", %s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	return text
 }
 
+// vcsInfo returns the commit the binary was built from (shortened to 12 hex
+// digits) and whether the working tree was dirty at build time. Both are empty
+// or false when the build carries no VCS stamp.
 func vcsInfo() (revision string, dirty bool) {
 	buildInfo, ok := debug.ReadBuildInfo()
 	if !ok {

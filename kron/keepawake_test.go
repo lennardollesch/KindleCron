@@ -10,9 +10,9 @@ import (
 
 func withTempState(t *testing.T) func() {
 	t.Helper()
-	d := t.TempDir()
+	dir := t.TempDir()
 	oldState := stateDir
-	stateDir = d
+	stateDir = dir
 	return func() { stateDir = oldState }
 }
 
@@ -50,8 +50,8 @@ func stubLipcCapture(t *testing.T, succeed bool) (logPath string, restore func()
 		exit = "1"
 	}
 	script := "#!/bin/sh\necho \"$*\" >> " + logPath + "\nexit " + exit + "\n"
-	p := filepath.Join(dir, "lipc-set-prop")
-	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+	path := filepath.Join(dir, "lipc-set-prop")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Skipf("cannot create lipc stub: %v", err)
 	}
 	old := os.Getenv("PATH")
@@ -59,9 +59,9 @@ func stubLipcCapture(t *testing.T, succeed bool) (logPath string, restore func()
 	return logPath, func() { os.Setenv("PATH", old) }
 }
 
-func readCalls(t *testing.T, p string) string {
+func readCalls(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
@@ -112,8 +112,8 @@ func TestReadyToSuspendDefersShortJob(t *testing.T) {
 	jobsDir = td
 	writeJob(t, td, "quick", "every 1m")
 
-	d := newDaemon()
-	d.onReadyToSuspend()
+	dm := newDaemon()
+	dm.onReadyToSuspend()
 
 	calls := readCalls(t, logp)
 	if !strings.Contains(calls, "abortSuspend") {
@@ -122,7 +122,7 @@ func TestReadyToSuspendDefersShortJob(t *testing.T) {
 	if strings.Contains(calls, "rtcWakeup") {
 		t.Fatalf("must not arm RTC when deferring; calls = %q", calls)
 	}
-	if !d.deferring {
+	if !dm.deferring {
 		t.Fatal("daemon did not record deferring state")
 	}
 }
@@ -142,9 +142,9 @@ func TestReadyToSuspendAbortsEveryReadyEvent(t *testing.T) {
 	jobsDir = td
 	writeJob(t, td, "quick", "every 1m")
 
-	d := newDaemon()
-	d.onReadyToSuspend()
-	d.onReadyToSuspend()
+	dm := newDaemon()
+	dm.onReadyToSuspend()
+	dm.onReadyToSuspend()
 
 	if got := strings.Count(readCalls(t, logp), "abortSuspend"); got != 2 {
 		t.Fatalf("abortSuspend calls = %d, want 2 (one per readyToSuspend)", got)
@@ -165,8 +165,8 @@ func TestReadyToSuspendArmsLongJob(t *testing.T) {
 	// Mark it as just-run so the next due time is ~1h out, not overdue.
 	setLastRun("slow", time.Now())
 
-	d := newDaemon()
-	d.onReadyToSuspend()
+	dm := newDaemon()
+	dm.onReadyToSuspend()
 
 	calls := readCalls(t, logp)
 	if !strings.Contains(calls, "rtcWakeup") {
@@ -188,8 +188,8 @@ func TestDeferDisabledArmsRTC(t *testing.T) {
 	jobsDir = td
 	writeJob(t, td, "quick", "every 1m")
 
-	d := newDaemon()
-	d.onReadyToSuspend()
+	dm := newDaemon()
+	dm.onReadyToSuspend()
 
 	calls := readCalls(t, logp)
 	if strings.Contains(calls, "abortSuspend") {
@@ -216,8 +216,8 @@ func TestWakeDoesNotPullForward(t *testing.T) {
 	setLastRun("slow", time.Now()) // next due ~1h out
 
 	runsBefore := jobRunMarker(t, "slow")
-	d := newDaemon()
-	d.onWake()
+	dm := newDaemon()
+	dm.onWake()
 
 	if jobRunMarker(t, "slow") != runsBefore {
 		t.Fatal("job was pulled forward on wake despite not being due")
@@ -241,8 +241,8 @@ func TestWakeNeverArmsRTC(t *testing.T) {
 	writeJob(t, td, "soon", "every 1m")
 	setLastRun("soon", time.Now().Add(-30*time.Second)) // next due ~30s
 
-	d := newDaemon()
-	d.onWake()
+	dm := newDaemon()
+	dm.onWake()
 
 	calls := readCalls(t, logp)
 	if strings.Contains(calls, "rtcWakeup") || strings.Contains(calls, "abortSuspend") {
@@ -291,11 +291,11 @@ func TestSeedEveryJobs(t *testing.T) {
 // writeJob creates a minimal .job file due immediately (mtime in the past).
 func writeJob(t *testing.T, dir, name, sched string) {
 	t.Helper()
-	p := filepath.Join(dir, name+".job")
+	path := filepath.Join(dir, name+".job")
 	content := "schedule=" + sched + "\ncommand=/bin/true\nenabled=1\n"
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(p, old, old)
+	os.Chtimes(path, old, old)
 }

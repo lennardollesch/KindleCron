@@ -1,0 +1,100 @@
+{
+	"items": [
+	{
+		"name": "KindleCron",
+		"priority": 0,
+		"items": [
+		{
+			"name": "Setup (link kron into PATH)",
+			"priority": 1,
+			"action": "sh -c 'k=$(find /mnt/us -type f -name kron 2>/dev/null | head -n1); [ -n \"$k\" ] && exec \"$k\" setup -eips'",
+			"exitmenu": false,
+			"status": false,
+			"internal": "status Setup kron"
+		},
+		{
+			"name": "Start",
+			"priority": 2,
+			"action": "kron daemon -eips",
+			"exitmenu": false,
+			"status": false,
+			"onboot": true,
+			"internal": "status Start kron"
+		},
+		{
+			"name": "Delete all jobs",
+			"priority": 3,
+			"items": [
+				{
+					"name": "[Confirm] Delete all jobs",
+					"priority": 0,
+					"action": "kron purge -y -eips",
+					"exitmenu": false,
+					"status": false,
+					"internal": "status Delete all jobs"
+				}
+			]
+
+		},
+		{
+			"name": "Kill running jobs",
+			"priority": 4,
+			"action": "kron kill-jobs -eips",
+			"exitmenu": false,
+			"status": false,
+			"internal": "status Kill all running jobs"
+		},
+		{
+			"name": "Advanced",
+			"priority": 5,
+			"items": [
+				{
+					"name": "Show version",
+					"priority": 0,
+					"action": "kron version -eips",
+					"exitmenu": false,
+					"status": false,
+					"internal": "status Show version"
+				},
+				{
+					"name": "Clear logs",
+					"priority": 1,
+					"items": [
+						{
+							"name": "[Confirm] Clear logs",
+							"priority": 0,
+							"action": "kron clear-logs -y -eips",
+							"exitmenu": false,
+							"status": false,
+							"internal": "status Clear logs"
+						}
+					]
+				},
+				{
+					"name": "Unlink (remove kron from PATH)",
+					"priority": 2,
+					"items": [
+						{
+							"name": "[Confirm] Unlink kron",
+							"priority": 0,
+							"action": "sh -c 'k=$(find /mnt/us -type f -name kron 2>/dev/null | head -n1); [ -n \"$k\" ] && exec \"$k\" unlink -eips'",
+							"exitmenu": false,
+							"status": false,
+							"internal": "status Unlink kron"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Stop",
+			"priority": 6,
+			"action": "kron stop -eips",
+			"exitmenu": false,
+			"status": false,
+			"internal": "status Stop kron"
+		}
+		]
+	}
+	]
+}

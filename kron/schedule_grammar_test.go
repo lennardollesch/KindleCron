@@ -16,13 +16,13 @@ func TestParseScheduleEvery(t *testing.T) {
 		{"every 90s", 90 * time.Second},
 		{"every 45", 45 * time.Second}, // bare number = seconds
 	}
-	for _, c := range cases {
-		got, err := parseSchedule(c.spec)
+	for _, testCase := range cases {
+		got, err := parseSchedule(testCase.spec)
 		if err != nil {
-			t.Fatalf("parseSchedule(%q): %v", c.spec, err)
+			t.Fatalf("parseSchedule(%q): %v", testCase.spec, err)
 		}
-		if got.kind != kEvery || got.interval != c.interval {
-			t.Fatalf("%q: kind=%d interval=%s, want every %s", c.spec, got.kind, got.interval, c.interval)
+		if got.kind != kindEvery || got.interval != testCase.interval {
+			t.Fatalf("%q: kind=%d interval=%s, want every %s", testCase.spec, got.kind, got.interval, testCase.interval)
 		}
 	}
 }
@@ -32,7 +32,7 @@ func TestParseScheduleAtAndOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if at.kind != kAt || len(at.times) != 2 {
+	if at.kind != kindAt || len(at.times) != 2 {
 		t.Fatalf("at parse = %+v", at)
 	}
 	if at.times[0] != (clock{7, 0}) || at.times[1] != (clock{19, 30}) {
@@ -44,7 +44,7 @@ func TestParseScheduleAtAndOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := time.Date(2026, 6, 15, 14, 30, 0, 0, time.Local)
-	if once.kind != kOnce || !once.once.Equal(want) {
+	if once.kind != kindOnce || !once.once.Equal(want) {
 		t.Fatalf("once = %+v, want %s", once, want)
 	}
 }
@@ -62,7 +62,7 @@ func TestParseScheduleErrors(t *testing.T) {
 }
 
 func TestAtBounds(t *testing.T) {
-	sched := schedule{kind: kAt, times: []clock{{7, 0}, {19, 0}}}
+	sched := schedule{kind: kindAt, times: []clock{{7, 0}, {19, 0}}}
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.Local)
 
 	recent, next := sched.atBounds(now)
@@ -77,7 +77,7 @@ func TestAtBounds(t *testing.T) {
 }
 
 func TestAtDueAndNextDue(t *testing.T) {
-	sched := schedule{kind: kAt, times: []clock{{7, 0}, {19, 0}}}
+	sched := schedule{kind: kindAt, times: []clock{{7, 0}, {19, 0}}}
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.Local)
 	anchor := now.Add(-48 * time.Hour)
 
@@ -109,7 +109,7 @@ func TestAtDueAndNextDue(t *testing.T) {
 
 func TestOnceNextDue(t *testing.T) {
 	future := time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local)
-	sched := schedule{kind: kOnce, once: future}
+	sched := schedule{kind: kindOnce, once: future}
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.Local)
 
 	due, ok := sched.nextDue(time.Unix(0, 0), now, now)
@@ -123,7 +123,7 @@ func TestOnceNextDue(t *testing.T) {
 	}
 
 	// Overdue once (device was off) catches up on the next evaluation.
-	overdue := schedule{kind: kOnce, once: now.Add(-time.Hour)}
+	overdue := schedule{kind: kindOnce, once: now.Add(-time.Hour)}
 	caught, ok := overdue.nextDue(time.Unix(0, 0), now.Add(-2*time.Hour), now)
 	if !ok || !caught.Equal(now) {
 		t.Fatalf("overdue once = %s, want now", caught)

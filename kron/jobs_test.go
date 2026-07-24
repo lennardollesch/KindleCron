@@ -65,9 +65,9 @@ func TestJobTimeoutKills(t *testing.T) {
 	td := t.TempDir()
 	stateDir = td
 
-	j := job{name: "hang", command: "sleep 30", timeout: 300 * time.Millisecond}
+	hangingJob := job{name: "hang", command: "sleep 30", timeout: 300 * time.Millisecond}
 	start := time.Now()
-	rc := runJob(j, nil)
+	rc := runJob(hangingJob, nil)
 	elapsed := time.Since(start)
 
 	if elapsed > 3*time.Second {
@@ -167,9 +167,9 @@ func TestReadyToSuspendAbortsWhileJobRunning(t *testing.T) {
 	writeJob(t, td, "slow", "every 1h")
 	setLastRun("slow", time.Now()) // next due far out
 
-	d := newDaemon()
-	d.jobDispatched() // pretend a job is running
-	d.onReadyToSuspend()
+	dm := newDaemon()
+	dm.jobDispatched() // pretend a job is running
+	dm.onReadyToSuspend()
 
 	calls := readCalls(t, logp)
 	if !strings.Contains(calls, "abortSuspend") {
@@ -194,9 +194,9 @@ func TestReadyToSuspendArmsAfterJobDone(t *testing.T) {
 	writeJob(t, td, "slow", "every 1h")
 	setLastRun("slow", time.Now())
 
-	d := newDaemon()
+	dm := newDaemon()
 	// no job running
-	d.onReadyToSuspend()
+	dm.onReadyToSuspend()
 
 	calls := readCalls(t, logp)
 	if !strings.Contains(calls, "rtcWakeup") {
@@ -215,21 +215,21 @@ func TestDispatchDueTracksRunning(t *testing.T) {
 
 	// A job that writes a marker, sleeps briefly, due now.
 	marker := filepath.Join(sd, "ran.txt")
-	writeJobCmd(t, td, "j", "every 1m", "sleep 0.4; echo done > "+marker)
-	setLastRun("j", time.Now().Add(-2*time.Minute)) // overdue -> due now
+	writeJobCmd(t, td, "slowjob", "every 1m", "sleep 0.4; echo done > "+marker)
+	setLastRun("slowjob", time.Now().Add(-2*time.Minute)) // overdue -> due now
 
-	d := newDaemon()
-	d.dispatchDue()
+	dm := newDaemon()
+	dm.dispatchDue()
 
-	if !d.anyJobRunning() {
+	if !dm.anyJobRunning() {
 		t.Fatal("jobsRunning should be >0 right after dispatch")
 	}
 	// Wait for completion.
 	deadline := time.Now().Add(3 * time.Second)
-	for d.anyJobRunning() && time.Now().Before(deadline) {
+	for dm.anyJobRunning() && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if d.anyJobRunning() {
+	if dm.anyJobRunning() {
 		t.Fatal("jobsRunning never returned to 0")
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -240,13 +240,13 @@ func TestDispatchDueTracksRunning(t *testing.T) {
 // writeJobCmd writes a .job with an explicit command, due-able via past mtime.
 func writeJobCmd(t *testing.T, dir, name, sched, cmd string) {
 	t.Helper()
-	p := filepath.Join(dir, name+".job")
+	path := filepath.Join(dir, name+".job")
 	content := "schedule=" + sched + "\ncommand=" + cmd + "\nenabled=1\n"
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(p, old, old)
+	os.Chtimes(path, old, old)
 }
 
 // TestKillRunningJobsTerminatesProcess verifies killRunningJobs actually kills a
@@ -261,43 +261,43 @@ func TestKillRunningJobsTerminatesProcess(t *testing.T) {
 	writeJobCmd(t, td, "longrun", "every 1m", "sleep 30")
 	setLastRun("longrun", time.Now().Add(-2*time.Minute)) // due now
 
-	d := newDaemon()
-	d.dispatchDue()
+	dm := newDaemon()
+	dm.dispatchDue()
 
 	// Wait until the process is actually registered (started), not just dispatched.
 	deadline := time.Now().Add(2 * time.Second)
-	for !d.hasRunningProcess() && time.Now().Before(deadline) {
+	for !dm.hasRunningProcess() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !d.hasRunningProcess() {
+	if !dm.hasRunningProcess() {
 		t.Fatal("job process never registered")
 	}
 
-	n := d.killRunningJobs()
-	if n != 1 {
-		t.Fatalf("killRunningJobs returned %d, want 1", n)
+	killed := dm.killRunningJobs()
+	if killed != 1 {
+		t.Fatalf("killRunningJobs returned %d, want 1", killed)
 	}
 
 	// After the kill, the goroutine's Wait returns and deregisters the job.
 	deadline = time.Now().Add(3 * time.Second)
-	for d.anyJobRunning() && time.Now().Before(deadline) {
+	for dm.anyJobRunning() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if d.anyJobRunning() {
+	if dm.anyJobRunning() {
 		t.Fatal("job still registered after kill (Wait did not return)")
 	}
 }
 
 // TestKillRunningJobsNoneRunning: killing with no jobs is a no-op returning 0.
 func TestKillRunningJobsNoneRunning(t *testing.T) {
-	d := newDaemon()
-	if n := d.killRunningJobs(); n != 0 {
-		t.Fatalf("killRunningJobs with none running returned %d, want 0", n)
+	dm := newDaemon()
+	if killed := dm.killRunningJobs(); killed != 0 {
+		t.Fatalf("killRunningJobs with none running returned %d, want 0", killed)
 	}
 }
 
 // TestJobPidFilesScan verifies jobPidFiles reads name->pid and skips reserved
-// kcron.* and malformed files.
+// kron.* and malformed files.
 func TestJobPidFilesScan(t *testing.T) {
 	defer withTempState(t)()
 	sd := t.TempDir()
@@ -305,7 +305,7 @@ func TestJobPidFilesScan(t *testing.T) {
 
 	os.WriteFile(filepath.Join(sd, "alpha.pid"), []byte("1234\n"), 0o644)
 	os.WriteFile(filepath.Join(sd, "beta.pid"), []byte("5678"), 0o644)
-	os.WriteFile(filepath.Join(sd, "kcron.pid"), []byte("999\n"), 0o644) // reserved
+	os.WriteFile(filepath.Join(sd, "kron.pid"), []byte("999\n"), 0o644)  // reserved
 	os.WriteFile(filepath.Join(sd, "bad.pid"), []byte("notanum"), 0o644) // malformed
 	os.WriteFile(filepath.Join(sd, "alpha.last"), []byte("0"), 0o644)    // not a pid file
 
@@ -316,8 +316,8 @@ func TestJobPidFilesScan(t *testing.T) {
 	if got["alpha"] != 1234 || got["beta"] != 5678 {
 		t.Fatalf("wrong pids: %v", got)
 	}
-	if _, ok := got["kcron"]; ok {
-		t.Fatal("reserved kcron.pid must be excluded")
+	if _, ok := got["kron"]; ok {
+		t.Fatal("reserved kron.pid must be excluded")
 	}
 	if _, ok := got["bad"]; ok {
 		t.Fatal("malformed pid file must be skipped")

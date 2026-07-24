@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">KindleCron (<code>kcron</code>)</h1>
+  <h1 align="center">KindleCron (<code>kron</code>)</h1>
 </p>
 
 <p align="center">
@@ -7,23 +7,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/lennardollesch/KindleCron/releases/latest">
-    <img src="https://img.shields.io/github/v/release/lennardollesch/KindleCron">
-  </a>
-  <a href="https://github.com/lennardollesch/KindleCron">
-    <img src="https://img.shields.io/github/stars/lennardollesch/KindleCron">
-  </a>
+  <a href="https://github.com/lennardollesch/KindleCron/releases/latest"><img src="https://img.shields.io/github/v/release/lennardollesch/KindleCron"></a> <a href="https://github.com/lennardollesch/KindleCron"><img src="https://img.shields.io/github/stars/lennardollesch/KindleCron"></a>
 </p>
 
 ---
 
 ## About
 
-KindleCron runs scheduled jobs on a jailbroken Kindle reliably and to the second, while letting the device sleep between them. It is a standalone, single static binary with no dependencies.
+KindleCron runs scheduled jobs on a jailbroken Kindle reliably and to the second, while letting the device sleep between them. It is a single static binary with nothing to install on the device.
 
 Ordinary `cron` is unreliable here. To save power, the Kindle suspends (CPU off) after a few minutes of inactivity, and a suspended device cannot run `crond`. The common workaround, holding the device in its `active` state, drains the battery.
 
 KindleCron takes the opposite approach. During the brief `readyToSuspend` window just before the device sleeps, it programs an RTC wake-up for the next job's due time; set this late in the cycle, the value is not overwritten by powerd. The Kindle then suspends normally and conserves power. When the job is due, the RTC fires, the device wakes into `screenSaver` state, becomes responsive and KindleCron runs the job.
+
+That underlying trick is not new. It has been known in the Kindle community for years (see [Credits](#credits)) and various scripts implement it ad hoc for one purpose each. What KindleCron adds is the packaging: a single, self-contained binary that turns the trick into a general-purpose scheduler with a cron grammar, persistent job state, keep-awake handling, per-job timeouts, logging and a defined exit-code contract. The power-state handling lives in one place and is maintained there, so any project that needs work to happen on a sleeping Kindle can schedule it in one command instead of reimplementing the powerd procedure itself.
 
 > [!WARNING]
 > Jobs scheduled more often than roughly every 3 minutes keep the device from suspending at all, draining the battery noticeably faster.
@@ -33,37 +30,43 @@ KindleCron takes the opposite approach. During the brief `readyToSuspend` window
 
 ## Installation
 
-1. Download the [latest release](https://github.com/lennardollesch/KindleCron/releases/latest)
+1. Download the [latest release](https://github.com/lennardollesch/KindleCron/releases/latest) to your computer
 2. Unzip it
 3. Connect the Kindle over USB
-4. Copy the `extensions` and `kcron` folders to the root of the Kindle drive (`/mnt/us`)
+4. Copy the `extensions` and `kron` folders to the root of the Kindle drive (`/mnt/us`)
+5. Run **Setup** once (KUAL: *kron -> Setup*, or a terminal: `/mnt/us/kron/kron setup`)
+
 
 > [!NOTE]
-> If you don't control KindleCron through KUAL, you can skip the `extensions` folder.
+> If you don't control kron through KUAL, you can leave out the `extensions` folder.  
+**Setup** is optional too: it symlinks the binary into `/usr/bin`, so `kron` can be called from anywhere. Some programs may expect it, otherwise use the full path (`/mnt/us/kron/kron`).
 
 ## Usage
 
 ```
-kcron [global flags] <command> [args]
+kron [global flags] <command> [args]
 
 Commands:
   daemon                              run the scheduler (default; start this at boot)
   stop                                tell a running daemon to shut down
   kill-jobs [NAME]                    kill orphaned job process group(s); all, or just NAME
   add [-timeout DUR] NAME SCHEDULE COMMAND...
-                                      register or replace a job
+                                      register or replace a job; NAME is a plain name
+                                      (no '/' or leading '.')
   remove NAME                         delete a job and its state
   enable NAME                         re-enable a disabled job (resumes scheduling)
   disable NAME                        stop scheduling a job without deleting it
   purge                               delete ALL jobs and their state (-y to skip prompt)
-  clean-logs                          empty kcron.log and all per-job logs (-y to skip prompt)
+  clear-logs                          empty kron.log and all per-job logs (-y to skip prompt)
   list                                show all jobs, when each next runs, and any timeout
+  setup                               symlink kron into /usr/bin so a bare `kron` works everywhere
+  unlink                              remove the /usr/bin/kron symlink that setup created
   version | help
 
 Global flags:
   -dir PATH        data directory for jobs/state/log
-                   (default: the binary's own directory; overrides $KCRON_DIR)
-  -logmax KB       cap kcron.log at KB kilobytes, dropping oldest lines
+                   (default: the binary's own directory; overrides $KRON_DIR)
+  -logmax KB       cap kron.log at KB kilobytes, dropping oldest lines
                    (0 = unlimited; default 256)
   -keepawake DUR   keep the device awake (no suspend) when the next job is due within
                    DUR (default 3m); 'off' to always suspend regardless of interval
@@ -72,12 +75,42 @@ Global flags:
   -jobtimeout DUR  global default run-time limit per job (default 10m); a job exceeding
                    its effective limit is killed. Override per job with add -timeout
   -version         print version
+  -eips            also show the result on the Kindle screen (centred, lower area) via
+                   eips. Meant for KUAL, where there is no terminal. Supported by
+                   daemon, stop, version, purge, kill-jobs, clear-logs, setup and unlink.
   -help            show help
 ```
 
-Global flags must come **before** the subcommand (`kcron -keepawake 5m daemon`), or,
-for commands that take no positional arguments (`daemon`, `list`, `stop`), in
-either position.
+Global flags must come **before** the subcommand (`kron -keepawake 5m daemon`), or,
+for commands that take no positional arguments (`daemon`, `list`, `stop`, `version`,
+`setup`, `unlink`), in either position.
+
+> [!NOTE]
+> The `-eips` flag mirrors a command's result onto the device screen (centred, lower
+> area) using Kindle's `eips` tool, so you get a visible readout from KUAL where
+> there is no terminal. It is supported by `daemon`, `stop`, `version`, `purge`,
+> `kill-jobs`, `clear-logs`, `setup` and `unlink` (e.g. `kron purge -y -eips`). The on-screen rendering
+> is handled by the shared
+> [kindle-utils](https://github.com/lennardollesch/kindle-utils) `eips` package.
+
+### Exit codes
+
+kron's exit code is the success signal, so another program (a launcher, an
+installer, [Scopae](https://github.com/lennardollesch/Scopae)) can drive it without parsing human-readable stdout:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | success - for `add`, the schedule was validated **and** the job written; `remove` is idempotent (removing a missing job still succeeds) |
+| `2` | invalid request: bad arguments or an unparseable schedule |
+| `1` | any other failure (I/O, permissions, ...) |
+
+stdout stays human-readable and may change wording (e.g. the keep-awake note),
+so callers should rely on the exit code.
+
+>[!NOTE]
+For Go programs, the official client in [`client/`](client/) wraps these
+invocations (`client.New`, `Add`, `Remove`) and maps the exit codes to typed
+errors, so a consumer never parses stdout.
 
 ### Schedule formats
 
@@ -94,13 +127,12 @@ at HH:MM[,HH:MM,...]        convenience: daily at local times (same as cron M H 
 ```
 
 ```sh
-kcron add weekly   "0 9 * * 1"             /mnt/us/app/weekly.sh
-kcron add poll     "*/30 * * * * *"        /mnt/us/app/poll.sh
-kcron add reminder "once 2026-06-15 14:30" /mnt/us/app/notify.sh
+kron add weekly   "0 9 * * 1"             /mnt/us/app/weekly.sh
+kron add poll     "*/30 * * * * *"        /mnt/us/app/poll.sh
+kron add reminder "once 2026-06-15 14:30" /mnt/us/app/notify.sh
 ```
 
-Reach for cron by default. `once` adds a single self-removing future run that cron
-cannot express. `every` (a fixed interval since the last run, and the only form
+`every` (a fixed interval since the last run, and the only form
 that also does arbitrary sub-minute intervals like `90s`) and `at` (daily
 wall-clock times, the same as `cron M H * * *`) are sugars you can use when they
 read more clearly.
@@ -108,8 +140,8 @@ read more clearly.
 ### Cron expressions
 
 A `cron` schedule takes a standard cron expression. The `cron` keyword is
-optional: a bare expression is treated as cron, so `kcron add j "0 9 * * 1" ...`
-is the same as `kcron add j "cron 0 9 * * 1" ...`. The field count is detected
+optional: a bare expression is treated as cron, so `kron add j "0 9 * * 1" ...`
+is the same as `kron add j "cron 0 9 * * 1" ...`. The field count is detected
 automatically: **5 fields** is the classic form, **6 fields** adds a leading
 seconds field.
 
@@ -130,11 +162,11 @@ Each field accepts `*` (all values), a single value, `a-b` ranges, `*/s` or
 of any of these. Month and day-of-week also accept three-letter names.
 
 ```sh
-kcron add j "30 7 * * 1-5"      ...   # weekdays at 07:30
-kcron add j "0 0 1 * *"         ...   # midnight on the 1st of every month
-kcron add j "0 */2 * * *"       ...   # every 2 hours on the hour
-kcron add j "*/30 * * * * *"    ...   # every 30 seconds (6-field)
-kcron add j "0 9 * * mon,thu"   ...   # Mondays and Thursdays at 09:00
+kron add j "30 7 * * 1-5"      ...   # weekdays at 07:30
+kron add j "0 0 1 * *"         ...   # midnight on the 1st of every month
+kron add j "0 */2 * * *"       ...   # every 2 hours on the hour
+kron add j "*/30 * * * * *"    ...   # every 30 seconds (6-field)
+kron add j "0 9 * * mon,thu"   ...   # Mondays and Thursdays at 09:00
 ```
 
 When **both** the day-of-month and day-of-week fields are restricted (neither is
@@ -150,10 +182,10 @@ default (in either direction). A job that exceeds its effective limit is killed
 (its whole process group), so a hung job can never pin the device awake.
 
 ```sh
-kcron add sync -timeout 2m "every 1h" /mnt/us/app/sync.sh
+kron add sync -timeout 2m "every 1h" /mnt/us/app/sync.sh
 ```
 
-The limit is shown by `kcron list`, and stored in the job file as `timeout=2m`.
+The limit is shown by `kron list`, and stored in the job file as `timeout=2m`.
 
 ## powerd internals
 

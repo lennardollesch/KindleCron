@@ -40,6 +40,8 @@ type cronExpr struct {
 	dowStar bool
 }
 
+// monthNames and dowNames are the three-letter symbols accepted by the month and
+// day-of-week fields, matched case-insensitively.
 var monthNames = map[string]int{
 	"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
 	"jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
@@ -165,6 +167,8 @@ func parseTerm(term string, lo, hi int, names map[string]int) (uint64, error) {
 	return mask, nil
 }
 
+// fieldValue resolves one numeric or symbolic value of a cron field, e.g. "3"
+// or "mon". names is the field's symbol table, or nil if it has none.
 func fieldValue(text string, names map[string]int) (int, error) {
 	text = strings.TrimSpace(text)
 	if names != nil {
@@ -197,26 +201,31 @@ const searchBound = 5
 // years (the expression is unsatisfiable). All arithmetic stays in the input's
 // location, so the time package resolves DST and month lengths.
 func (expr cronExpr) next(after time.Time) time.Time {
-	t := after.Truncate(time.Second).Add(time.Second)
-	limit := t.Year() + searchBound
-	loc := t.Location()
+	candidate := after.Truncate(time.Second).Add(time.Second)
+	limit := candidate.Year() + searchBound
+	location := candidate.Location()
 	for {
-		if t.Year() > limit {
+		if candidate.Year() > limit {
 			return time.Time{}
 		}
+		// Each case skips the candidate forward to the start of the next unit of
+		// the coarsest field that does not match, so unmatched years and months
+		// are stepped over instead of scanned second by second.
+		year, month, day := candidate.Date()
+		hour, minute, _ := candidate.Clock()
 		switch {
-		case expr.month&(1<<uint(t.Month())) == 0:
-			t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, loc).AddDate(0, 1, 0)
-		case !expr.dayMatch(t.Day(), int(t.Weekday())):
-			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
-		case expr.hour&(1<<uint(t.Hour())) == 0:
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc).Add(time.Hour)
-		case expr.min&(1<<uint(t.Minute())) == 0:
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, loc).Add(time.Minute)
-		case expr.sec&(1<<uint(t.Second())) == 0:
-			t = t.Add(time.Second)
+		case expr.month&(1<<uint(month)) == 0:
+			candidate = time.Date(year, month, 1, 0, 0, 0, 0, location).AddDate(0, 1, 0)
+		case !expr.dayMatch(day, int(candidate.Weekday())):
+			candidate = time.Date(year, month, day, 0, 0, 0, 0, location).AddDate(0, 0, 1)
+		case expr.hour&(1<<uint(hour)) == 0:
+			candidate = time.Date(year, month, day, hour, 0, 0, 0, location).Add(time.Hour)
+		case expr.min&(1<<uint(minute)) == 0:
+			candidate = time.Date(year, month, day, hour, minute, 0, 0, location).Add(time.Minute)
+		case expr.sec&(1<<uint(candidate.Second())) == 0:
+			candidate = candidate.Add(time.Second)
 		default:
-			return t
+			return candidate
 		}
 	}
 }
@@ -226,26 +235,30 @@ func (expr cronExpr) next(after time.Time) time.Time {
 // of the preceding field when a field does not match. A zero time means no
 // match exists within searchBound years.
 func (expr cronExpr) prev(before time.Time) time.Time {
-	t := before.Truncate(time.Second)
-	limit := t.Year() - searchBound
-	loc := t.Location()
+	candidate := before.Truncate(time.Second)
+	limit := candidate.Year() - searchBound
+	location := candidate.Location()
 	for {
-		if t.Year() < limit {
+		if candidate.Year() < limit {
 			return time.Time{}
 		}
+		// Mirrors next: an unmatched field rewinds the candidate to the last
+		// second before that field's current unit began.
+		year, month, day := candidate.Date()
+		hour, minute, _ := candidate.Clock()
 		switch {
-		case expr.month&(1<<uint(t.Month())) == 0:
-			t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, loc).Add(-time.Second)
-		case !expr.dayMatch(t.Day(), int(t.Weekday())):
-			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc).Add(-time.Second)
-		case expr.hour&(1<<uint(t.Hour())) == 0:
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc).Add(-time.Second)
-		case expr.min&(1<<uint(t.Minute())) == 0:
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, loc).Add(-time.Second)
-		case expr.sec&(1<<uint(t.Second())) == 0:
-			t = t.Add(-time.Second)
+		case expr.month&(1<<uint(month)) == 0:
+			candidate = time.Date(year, month, 1, 0, 0, 0, 0, location).Add(-time.Second)
+		case !expr.dayMatch(day, int(candidate.Weekday())):
+			candidate = time.Date(year, month, day, 0, 0, 0, 0, location).Add(-time.Second)
+		case expr.hour&(1<<uint(hour)) == 0:
+			candidate = time.Date(year, month, day, hour, 0, 0, 0, location).Add(-time.Second)
+		case expr.min&(1<<uint(minute)) == 0:
+			candidate = time.Date(year, month, day, hour, minute, 0, 0, location).Add(-time.Second)
+		case expr.sec&(1<<uint(candidate.Second())) == 0:
+			candidate = candidate.Add(-time.Second)
 		default:
-			return t
+			return candidate
 		}
 	}
 }

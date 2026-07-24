@@ -29,14 +29,14 @@ jobs:
     - name: Go Setup
       uses: actions/setup-go@v6
       with:
-        go-version-file: kcron/go.mod
+        go-version-file: kron/go.mod
 
     - name: Dependencies
-      working-directory: kcron
+      working-directory: kron
       run: go mod download
 
     - name: Test
-      working-directory: kcron
+      working-directory: kron
       run: go test ./...
 
     - name: Version
@@ -44,33 +44,33 @@ jobs:
       run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
     - name: Build
-      working-directory: kcron
+      working-directory: kron
       env:
         VERSION: ${{ steps.version.outputs.VERSION }}
       run: |
-        mkdir -p ../dist/kcron
-        CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o ../dist/kcron/kcron .
+        mkdir -p ../dist/kron
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o ../dist/kron/kron .
 
     - name: Assets
       run: |
         cp README.md dist/
         cp LICENSE dist/
-        mkdir -p dist/extensions/kcron
-        cp extensions/kcron/menu.json dist/extensions/kcron
+        mkdir -p dist/extensions/KindleCron
+        cp extensions/KindleCron/menu.json dist/extensions/KindleCron
 
     - name: XML
       env:
         VERSION: ${{ steps.version.outputs.VERSION }}
-      run: sed "s|{{VERSION}}|${VERSION#v}|g" extensions/kcron/config.xml.template > dist/extensions/kcron/config.xml
+      run: sed "s|{{VERSION}}|${VERSION#v}|g" extensions/KindleCron/config.xml.template > dist/extensions/KindleCron/config.xml
 
     - name: ZIP
       env:
         VERSION: ${{ steps.version.outputs.VERSION }}
       run: |
         cd dist
-        zip -r "../kcron_${VERSION}.zip" .
+        zip -r "../kron_${VERSION}.zip" .
 
     - name: Release
       uses: softprops/action-gh-release@v2
       with:
-        files: kcron_${{ steps.version.outputs.VERSION }}.zip
+        files: kron_${{ steps.version.outputs.VERSION }}.zip
