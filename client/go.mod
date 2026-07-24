@@ -1,3 +1,3 @@
-module github.com/lennardollesch/KindleJobSchedulerDev/client
+module github.com/lennardollesch/KindleCron/client
 
 go 1.25.0
